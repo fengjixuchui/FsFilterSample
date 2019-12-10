@@ -29,10 +29,14 @@ __user_code
 
 #pragma comment(lib, "psapi.lib")
 
-#define TIME_BUFFER_LENGTH 20
+#define TIME_BUFFER_LENGTH 30
 #define TIME_ERROR         "time error"
 
 #define POLL_INTERVAL   200     // 200 milliseconds
+
+typedef HRESULT (*RetrieveLogRecordsCallback)(char* fileName, char accessType, char* accessTime, char* author, char* user);
+
+RetrieveLogRecordsCallback g_RetrieveLogRecordsCallback = NULL; // global function pointer.
 
 
 // typedef NTSTATUS (*QUERY_INFO_PROCESS) (
@@ -64,7 +68,7 @@ __user_code
 // 		if (NULL == ZwQueryInformationProcess) {
 // 			DbgPrint("Cannot resolve ZwQueryInformationProcess\n");
 // 		}
-// 	}    
+// 	}
 
 //     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, ProcessID);
 //     if(!hProcess){
@@ -138,6 +142,81 @@ Return Value:
     }
 
     return FALSE;
+}
+
+HRESULT SetGetRecCb(RetrieveLogRecordsCallback cb)
+{
+    g_RetrieveLogRecordsCallback = cb;
+    return 0;
+}
+
+
+WCHAR* DumpNameCxtLine(__in WCHAR* Name,  __inout WCHAR* line, __inout size_t *length)
+{
+    WCHAR* tmp;
+    WCHAR* ptr;
+    ptr = wcschr(Name ,L'\n');
+	if (!ptr) return NULL;
+    if((ptr-Name+1)>*length)
+    {
+        wcsncpy_s(line, *length, Name, *length-1);
+    }else{
+        wcsncpy_s(line, *length, Name, (ptr-Name));
+    }
+    tmp = line;
+    *(tmp + (ptr-Name)) = UNICODE_NULL;
+    *length = (ptr-Name);
+    return ptr+1;
+}
+
+ULONG
+FormatSystemTime(
+    __in SYSTEMTIME *SystemTime,
+    __out_bcount(BufferLength) CHAR *Buffer,
+    __in ULONG BufferLength
+    )
+/*++
+Routine Description:
+
+    Formats the values in a SystemTime struct into the buffer
+    passed in.  The resulting string is NULL terminated.  The format
+    for the time is:
+        hours:minutes:seconds:milliseconds
+
+Arguments:
+
+    SystemTime - the struct to format
+    Buffer - the buffer to place the formatted time in
+    BufferLength - the size of the buffer
+
+Return Value:
+
+    The length of the string returned in Buffer.
+
+--*/
+{
+    ULONG returnLength = 0;
+
+    if (BufferLength < TIME_BUFFER_LENGTH) {
+
+        //
+        // Buffer is too short so exit
+        //
+
+        return 0;
+    }
+
+    returnLength = sprintf_s( Buffer,
+                            BufferLength,
+                            "%04d-%02d-%02d %02d:%02d:%02d",
+                            SystemTime-> wYear,
+                            SystemTime->wMonth,
+                            SystemTime->wDay,
+                            SystemTime->wHour,
+                            SystemTime->wMinute,
+                            SystemTime->wSecond);
+
+    return returnLength;
 }
 
 DWORD
@@ -287,6 +366,49 @@ Return Value:
                         pLogRecord->Name,
                         pRecordData,
                         context->OutputFile );
+        }
+
+        if(g_RetrieveLogRecordsCallback)
+        {
+            if(pLogRecord->Name != NULL) {
+                WCHAR pline[MAX_PATH];
+                UCHAR fileName[MAX_PATH*2];
+                UCHAR author[MAX_PATH*2];
+				UCHAR user[MAX_PATH*2];
+                CHAR time[TIME_BUFFER_LENGTH];
+                FILETIME localTime;
+                SYSTEMTIME systemTime;
+                size_t llen = MAX_PATH;
+                WCHAR* pnextline = DumpNameCxtLine(pLogRecord->Name, pline, &llen);
+                llen = WideCharToMultiByte(CP_UTF8, 0, pline, llen, fileName, MAX_PATH*2, NULL, NULL);
+                //strcpy_s(fileName, llen, (char*)pline);
+                fileName[llen] = '\0';
+
+                llen = MAX_PATH;
+                pnextline = DumpNameCxtLine(pnextline, pline, &llen);
+                llen = WideCharToMultiByte(CP_UTF8, 0, pline, llen, author, MAX_PATH*2, NULL, NULL);
+                //strcpy_s(author, llen, (char*)pline);
+                author[llen] = '\0';
+
+				llen = MAX_PATH;
+				pnextline = DumpNameCxtLine(pnextline, pline, &llen);
+				llen = WideCharToMultiByte(CP_UTF8, 0, pline, llen, user, MAX_PATH*2, NULL, NULL);
+				//strcpy_s(user, llen, (char*)pline);
+				user[llen] = '\0';
+
+                FileTimeToLocalFileTime( (FILETIME *)&(pRecordData->OriginatingTime), &localTime );
+                FileTimeToSystemTime( &localTime, &systemTime );
+
+                if (FormatSystemTime( &systemTime, time, TIME_BUFFER_LENGTH )) {
+
+                    (*g_RetrieveLogRecordsCallback)(fileName, pRecordData->Reserved[0], time,  author, user);
+
+                } else {
+
+                    (*g_RetrieveLogRecordsCallback)(fileName, pRecordData->Reserved[0], "", author, user);
+
+                }
+            }
         }
 
         //
@@ -1081,55 +1203,6 @@ Return Value:
 }
 
 
-ULONG
-FormatSystemTime(
-    __in SYSTEMTIME *SystemTime,
-    __out_bcount(BufferLength) CHAR *Buffer,
-    __in ULONG BufferLength
-    )
-/*++
-Routine Description:
-
-    Formats the values in a SystemTime struct into the buffer
-    passed in.  The resulting string is NULL terminated.  The format
-    for the time is:
-        hours:minutes:seconds:milliseconds
-
-Arguments:
-
-    SystemTime - the struct to format
-    Buffer - the buffer to place the formatted time in
-    BufferLength - the size of the buffer
-
-Return Value:
-
-    The length of the string returned in Buffer.
-
---*/
-{
-    ULONG returnLength = 0;
-
-    if (BufferLength < TIME_BUFFER_LENGTH) {
-
-        //
-        // Buffer is too short so exit
-        //
-
-        return 0;
-    }
-
-    returnLength = sprintf_s( Buffer,
-                            BufferLength,
-                            "%02d:%02d:%02d:%03d",
-                            SystemTime->wHour,
-                            SystemTime->wMinute,
-                            SystemTime->wSecond,
-                            SystemTime->wMilliseconds );
-
-    return returnLength;
-}
-
-
 BOOL ReadLine(char *buff, int size, FILE *fp)
 {
   char *tmp;
@@ -1149,25 +1222,6 @@ BOOL ReadLine(char *buff, int size, FILE *fp)
   }
   return TRUE;
 }
-
-WCHAR* DumpNameCxtLine(__in WCHAR* Name,  __inout WCHAR* line, __inout size_t *length)
-{
-    WCHAR* tmp;
-    WCHAR* ptr;
-    ptr = wcschr(Name ,L'\n');
-    if((ptr-Name+1)>*length)
-    {
-        *line = UNICODE_NULL;
-        *length = 0;
-        return ptr;
-    }
-    wcsncpy_s(line, *length, Name, (ptr-Name));
-    tmp = line;
-    *(tmp + (ptr-Name)) = UNICODE_NULL;
-    *length = (ptr-Name);
-    return ptr+1;
-}
-
 
 VOID
 FileDump (
@@ -1224,7 +1278,7 @@ Return Value:
 // #endif
         // didFileHeader = TRUE;
     // }
-	
+
     if (!didFileHeader) {
 
 #if defined(_WIN64)
@@ -1235,8 +1289,8 @@ Return Value:
         fprintf( File, "---\t----------\t------------\t-----------------------------------\t-----------------------------------\t----------\t--------------------------------------------------\n");
 #endif
         didFileHeader = TRUE;
-    }	
-	
+    }
+
 
     //
     // Is this an Irp or a FastIo?
@@ -1287,7 +1341,7 @@ Return Value:
     // Convert completion time
     //
 
-    //FileTimeToLocalFileTime( (FILETIME *)&(RecordData->CompletionTime), 
+    //FileTimeToLocalFileTime( (FILETIME *)&(RecordData->CompletionTime),
     //                         &localTime );
     // FileTimeToSystemTime( &localTime,
     //                       &systemTime );
@@ -1335,13 +1389,15 @@ Return Value:
     llen = MAX_PATH;
     pnextline = DumpNameCxtLine(Name, pline, &llen);
     WideCharToMultiByte(CP_ACP, 0, pline, -1, buffer, MAX_PATH*2, NULL, NULL);
-    //fprintf(File, "\t%S", pline );
     fprintf(File, "\t%s", buffer );
     llen = MAX_PATH; Name = pnextline;
     pnextline = DumpNameCxtLine(Name, pline, &llen);
     WideCharToMultiByte(CP_ACP, 0, pline, -1, buffer, MAX_PATH*2, NULL, NULL);
-    //fprintf(File, "\n%S", pline );
     fprintf(File, "\n%s", buffer );
+	llen = MAX_PATH; Name = pnextline;
+	pnextline = DumpNameCxtLine(Name, pline, &llen);
+	WideCharToMultiByte(CP_ACP, 0, pline, -1, buffer, MAX_PATH * 2, NULL, NULL);
+	fprintf(File, "\n%s", buffer);
     fprintf( File, "\n" );
 }
 
@@ -1392,7 +1448,7 @@ Return Value:
 // #endif
         // didScreenHeader = TRUE;
     // }
-	
+
     if (!didScreenHeader) {
 
 #if defined(_WIN64)
@@ -1403,7 +1459,7 @@ Return Value:
         printf("---\t----------\t------------\t-----------------------------------\t-----------------------------------\t----------\t--------------------------------------------------\n");
 #endif
         didScreenHeader = TRUE;
-    }		
+    }
 
     //
     //  Display informatoin

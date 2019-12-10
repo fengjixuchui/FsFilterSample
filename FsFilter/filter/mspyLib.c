@@ -1,4 +1,4 @@
-/*++
+﻿/*++
 
 Copyright (c) 1989-2002  Microsoft Corporation
 
@@ -34,6 +34,9 @@ Environment:
 #ifdef ALLOC_PRAGMA
     #pragma alloc_text(INIT, SpyReadDriverParameters)
 #endif
+
+
+#define SID_TAG		'dis_'
 
 UCHAR TxNotificationToMinorCode (
     __in ULONG TxNotification
@@ -446,6 +449,10 @@ Return Value:
     WCHAR strBuffer[(sizeof(UNICODE_STRING) + MAX_PATH*2)/sizeof(WCHAR)];
     //PEPROCESS *PEprocess = NULL;
 
+	PACCESS_STATE AccessState;
+	WCHAR* sidbuf;
+	UNICODE_STRING sidString;
+
     status = FltGetDeviceObject(FltObjects->Volume,&devObj);
     if (NT_SUCCESS(status)) {
 
@@ -476,6 +483,30 @@ Return Value:
 
     GetProcessImageName((HANDLE)recordData->ProcessId, ProcessImageName);
     SpySetRecordName( &(RecordList->LogRecord), ProcessImageName );
+
+	//if (Data->Iopb->MajorFunction == IRP_MJ_CREATE){
+		//Token = SeQuerySubjectContextToken((&(Data->Iopb->Parameters.Create.SecurityContext->AccessState->SubjectSecurityContext)));
+		// Status = SeQueryInformationToken(Token, TokenOwner, &Towner);
+		// if (Status == STATUS_SUCCESS) {
+		// 	sid = Towner->Owner;
+		// 	if (RtlValidSid(sid)) {
+		// 		SIDLength = RtlLengthSid(sid);
+		// 	}
+		// 	// Save the sid and free the owner token
+		// 	ExFreePool(Towner);
+		// }
+
+		//AccessState = Data->Iopb->Parameters.Create.SecurityContext->AccessState;
+		AccessState = NULL;
+		sidbuf = ExAllocatePoolWithTag(NonPagedPool, 128, SID_TAG);
+		RtlInitUnicodeString(&sidString, sidbuf);
+
+		if (GetSID(&sidString, AccessState) == STATUS_SUCCESS){
+			SpySetRecordName(&(RecordList->LogRecord), &sidString);
+		}
+
+		ExFreePool(sidString.Buffer);
+	//}
 
     // status = PsLookupProcessByProcessId(recordData->ProcessId, PEprocess);
 
@@ -533,13 +564,29 @@ Return Value:
 
 --*/
 {
-	UNREFERENCED_PARAMETER(Data);
-	UNREFERENCED_PARAMETER(RecordList);
-    //PRECORD_DATA recordData = &RecordList->LogRecord.Data;
+	//UNREFERENCED_PARAMETER(Data);
+	//UNREFERENCED_PARAMETER(RecordList);
+    PRECORD_DATA recordData = &RecordList->LogRecord.Data;
 
     //recordData->Status = Data->IoStatus.Status;
     //recordData->Information = Data->IoStatus.Information;
     //KeQuerySystemTime( &recordData->CompletionTime );
+
+    if( Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileDispositionInformation )
+    {
+           RecordList->LogRecord.Data.Reserved[0] = 'D';
+    }
+    else if( Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation )
+    {
+        RecordList->LogRecord.Data.Reserved[0] = 'R';
+    }
+    else
+    {
+        if(recordData->CallbackMajorId == IRP_MJ_WRITE )
+        {
+            RecordList->LogRecord.Data.Reserved[0] = 'W';
+        }
+    }    
 }
 
 

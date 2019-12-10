@@ -1,4 +1,4 @@
-#ifndef __MSPROCESS_H__
+﻿#ifndef __MSPROCESS_H__
 #define __MSPROCESS_H__
 
 /*************************************************************************
@@ -6,7 +6,7 @@
 *************************************************************************/
 
 NTSTATUS GetCurrentProcessName();
-
+NTSTATUS GetSID(PUNICODE_STRING sidString, PACCESS_STATE AccessState);
 NTSTATUS GetProcessImageName(HANDLE processId, PUNICODE_STRING ProcessImageName);
 
 
